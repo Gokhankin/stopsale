@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StopSale Kontrol ve Oda Doluluk Dashboard</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+
+<style>
+/* Global Responsive Mobile Tweaks */
+html, body {
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+}
+.container, .container-fluid, main, .main-content, .card, div {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+table {
+    display: block !important;
+    width: 100% !important;
+    overflow-x: auto !important;
+    white-space: nowrap !important;
+    -webkit-overflow-scrolling: touch !important;
+}
+.table-responsive, .responsive-table-wrapper {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+}
+@media (max-width: 768px) {
+    .grid, .row, [class*="grid-cols-"] {
+        grid-template-columns: 1fr !important;
+    }
+    .flex-wrap-mobile {
+        flex-direction: column !important;
+    }
+    input, select, button {
+        font-size: 16px !important; /* Prevents auto zoom on iOS */
+    }
+}
+</style>
+
+<style>
+/* Mobile Friendly Calendar Fixes */
+@media (max-width: 768px) {
+    body {
+        overflow-x: auto !important;
+    }
+    .calendar-container, .table-responsive, div:has(> table) {
+        width: 100% !important;
+        max-width: 100vw !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-x pan-y !important;
+    }
+    table {
+        font-size: 12px !important;
+        display: table !important; /* Restore normal table display so cells receive touches */
+    }
+    th, td {
+        padding: 4px 6px !important;
+        min-width: 32px !important;
+        touch-action: manipulation !important;
+    }
+    .month-header, .calendar-header {
+        font-size: 14px !important;
+    }
+    button, input, select {
+        touch-action: manipulation !important;
+    }
+}
+</style>
+</head>
+<body>
+    <!-- App Container -->
+    <div class="app-container">
+        
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-logo">
+                <div class="logo-icon"><i class="fa-solid fa-hotel"></i></div>
+                <div class="logo-text">
+                    <h1>StopSale Audit</h1>
+                    <span>Otel Doluluk & Kontrol Dashboard</span>
+                </div>
+            </div>
+            
+            <div class="header-actions">
+                <button id="btn-manage-local" class="btn btn-secondary">
+                    <i class="fa-solid fa-list-check"></i> Planlanan Stopsale'ler
+                </button>
+                <button id="btn-settings" class="btn btn-secondary">
+                    <i class="fa-solid fa-sliders"></i> Ayarlar
+                </button>
+                <div class="last-sync">
+                    <i class="fa-solid fa-rotate"></i> Son Güncelleme: <span id="sync-time">Yükleniyor...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- KPI Dashboard Section -->
+        <section class="kpi-section">
+            <div class="kpi-card glass" id="kpi-total-dates">
+                <div class="kpi-icon color-blue"><i class="fa-regular fa-calendar-days"></i></div>
+                <div class="kpi-info">
+                    <h3>Toplam Gün</h3>
+                    <div class="kpi-value" id="val-total-dates">-</div>
+                    <p class="kpi-sub">İncelenen Sezon Süresi</p>
+                </div>
+            </div>
+            <div class="kpi-card glass" id="kpi-avg-occ">
+                <div class="kpi-icon color-green"><i class="fa-solid fa-chart-pie"></i></div>
+                <div class="kpi-info">
+                    <h3>Ort. Doluluk</h3>
+                    <div class="kpi-value" id="val-avg-occ">-%</div>
+                    <p class="kpi-sub">Tüm Sezon Ortalaması</p>
+                </div>
+            </div>
+            <div class="kpi-card glass card-critical" id="kpi-critical-dates">
+                <div class="kpi-icon color-red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                <div class="kpi-info">
+                    <h3>Stopsale Gerekli</h3>
+                    <div class="kpi-value" id="val-critical-dates">-</div>
+                    <p class="kpi-sub">Kritik/Stopsale Eksik Gün</p>
+                </div>
+            </div>
+            <div class="kpi-card glass card-active-ss" id="kpi-active-stopsales">
+                <div class="kpi-icon color-purple"><i class="fa-solid fa-ban"></i></div>
+                <div class="kpi-info">
+                    <h3>Aktif Stopsale</h3>
+                    <div class="kpi-value" id="val-active-stopsales">-</div>
+                    <p class="kpi-sub">Sistemde Girilmiş Gün Sayısı</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Filter Bar -->
+        <section class="filter-section glass">
+            <div class="filter-title"><i class="fa-solid fa-filter"></i> Filtreler</div>
+            <div class="filter-controls">
+                <div class="filter-group">
+                    <label for="filter-start-date">Başlangıç Tarihi</label>
+                    <input type="date" id="filter-start-date" value="2026-06-01">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-end-date">Bitiş Tarihi</label>
+                    <input type="date" id="filter-end-date" value="2026-10-31">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-room-type">Oda Tipi</label>
+                    <select id="filter-room-type">
+                        <option value="ALL">Tüm Oda Tipleri (Otel Geneli)</option>
+                        <!-- Room types will be populated dynamically -->
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filter-status">Durum</label>
+                    <select id="filter-status">
+                        <option value="ALL">Tüm Günler</option>
+                        <option value="CRITICAL">Stopsale Gerekli (Eksik veya Dolu)</option>
+                        <option value="MISSING_STOPSALE">Stopsale Eksik (Dolu ama Stopsale Yok)</option>
+                        <option value="STOPSALE_ACTIVE">Stopsale Aktif (Sistemde Engelli)</option>
+                        <option value="REOPEN_RECOMMENDED">Satışa Açılabilir (Stopsale Var ama Boş)</option>
+                        <option value="NORMAL">Normal Doluluk (Sorunsuz)</option>
+                    </select>
+                </div>
+                <div class="filter-group button-group">
+                    <button id="btn-apply-filters" class="btn btn-primary"><i class="fa-solid fa-magnifying-glass"></i> Filtrele</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Workspace: Calendar & Table -->
+        <div class="dashboard-grid">
+            
+            <!-- Calendar Overview Column (Left or Top) -->
+            <div class="dashboard-column flex-column">
+                <div class="panel glass">
+                    <div class="panel-header">
+                        <h2><i class="fa-regular fa-calendar"></i> Sezon Takvimi (Isı Haritası)</h2>
+                        <div class="legend">
+                            <span class="legend-item"><span class="legend-dot normal"></span> Az Dolu</span>
+                            <span class="legend-item"><span class="legend-dot warn"></span> Yoğun</span>
+                            <span class="legend-item"><span class="legend-dot danger"></span> Stopsale Gerekli</span>
+                            <span class="legend-item"><span class="legend-dot stopsale"></span> Stopsale Aktif</span>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="calendar-months-container" id="calendar-heatmap">
+                            <!-- Months populated dynamically -->
+                            <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> Veriler Yükleniyor...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Details & List Column (Right or Bottom) -->
+            <div class="dashboard-column">
+                <div class="panel glass">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-list-ol"></i> Tarih Bazlı Stopsale Denetim Raporu</h2>
+                        <div class="panel-actions">
+                            <button id="btn-export-excel" class="btn btn-small btn-secondary"><i class="fa-solid fa-file-excel"></i> Excel İndir</button>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="table-container">
+                            <table class="data-table" id="audit-table">
+                                <thead>
+                                    <tr>
+                                        <th>Tarih</th>
+                                        <th>Gün</th>
+                                        <th>Toplam Doluluk</th>
+                                        <th>Doluluk %</th>
+                                        <th>Oda Tipleri Durumu</th>
+                                        <th>Kural / Stopsale Durumu</th>
+                                        <th>İşlemler</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="audit-table-body">
+                                    <tr>
+                                        <td colspan="7" class="text-center">Yükleniyor...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- MODAL: Settings -->
+    <div id="modal-settings" class="modal-backdrop">
+        <div class="modal glass">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-sliders"></i> Analiz ve Denetim Ayarları</h2>
+                <button class="modal-close btn-close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="form-settings">
+                    <div class="form-group">
+                        <label for="setting-threshold">Stopsale Tetikleme Doluluk Oranı (%)</label>
+                        <input type="number" id="setting-threshold" min="50" max="100" step="0.5" required>
+                        <small>Otel geneli veya oda tipi doluluğu bu orana ulaştığında Stopsale önerilir.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="setting-buffer">Güvenlik Oda Limiti (Boş Oda Sayısı)</label>
+                        <input type="number" id="setting-buffer" min="0" max="10" required>
+                        <small>Kalan boş oda sayısı bu rakama eşit veya altına indiğinde Stopsale tetiklenir (örn: Kalan boş oda <= 2).</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="setting-year">Sezon Yılı</label>
+                        <input type="number" id="setting-year" min="2020" max="2035" required>
+                        <small>Sedna SQL veritabanından çekilecek rezervasyonların yılı.</small>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary modal-close">İptal</button>
+                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Local Stopsale Manager -->
+    <div id="modal-local-manager" class="modal-backdrop">
+        <div class="modal glass modal-large">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-list-check"></i> Planlanan Stopsale Yönetimi</h2>
+                <button class="modal-close btn-close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="split-layout">
+                    <!-- Left: Add local stopsale -->
+                    <div class="split-panel">
+                        <h3><i class="fa-solid fa-plus"></i> Stopsale Planı Ekle</h3>
+                        <form id="form-local-stopsale">
+                            <div class="form-group">
+                                <label for="ls-start-date">Başlangıç Tarihi</label>
+                                <input type="date" id="ls-start-date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="ls-end-date">Bitiş Tarihi</label>
+                                <input type="date" id="ls-end-date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="ls-room-type">Oda Tipi</label>
+                                <select id="ls-room-type" required>
+                                    <option value="ALL">Tüm Oda Tipleri</option>
+                                    <!-- Room types populated dynamically -->
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="ls-remark">Açıklama / Gerekçe</label>
+                                <input type="text" id="ls-remark" placeholder="örn. Acente Stopsale, Özel Blokaj" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-full">Planı Kaydet</button>
+                        </form>
+                    </div>
+                    
+                    <!-- Right: List local stopsales -->
+                    <div class="split-panel flex-2">
+                        <h3><i class="fa-solid fa-list"></i> Aktif Planlar</h3>
+                        <div class="table-container list-container">
+                            <table class="data-table small-table">
+                                <thead>
+                                    <tr>
+                                        <th>Oda Tipi</th>
+                                        <th>Giriş</th>
+                                        <th>Çıkış</th>
+                                        <th>Gerekçe</th>
+                                        <th>İşlem</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="local-stopsales-tbody">
+                                    <tr>
+                                        <td colspan="5" class="text-center">Yükleniyor...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Date Details & Guest List -->
+    <div id="modal-date-details" class="modal-backdrop">
+        <div class="modal glass modal-extra-large">
+            <div class="modal-header">
+                <h2>
+                    <i class="fa-solid fa-calendar-day"></i> 
+                    <span id="detail-date-title">Tarih Detayları</span>
+                    <span id="detail-date-badge" class="badge">Durum</span>
+                </h2>
+                <button class="modal-close btn-close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <!-- Section 1: Room Type Occupancy Bars -->
+                <div class="detail-section">
+                    <h3><i class="fa-solid fa-bed"></i> Oda Tipi Doluluk Durumları</h3>
+                    <div class="occupancy-bars-grid" id="detail-occupancy-bars">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+                
+                <!-- Section 2: Stopsale Alert Status & Local Planner Shortcut -->
+                <div class="detail-section alert-status-box" id="detail-alert-box">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- Section 3: Guest Reservation Grid -->
+                <div class="detail-section">
+                    <div class="section-header">
+                        <h3><i class="fa-solid fa-users"></i> Konaklayan Guest Listesi</h3>
+                        <span id="detail-guest-count" class="guest-count-badge">0 Oda</span>
+                    </div>
+                    <div class="table-container guest-table-container">
+                        <table class="data-table small-table" id="detail-guest-table">
+                            <thead>
+                                <tr>
+                                    <th>Oda</th>
+                                    <th>Misafir Adı</th>
+                                    <th>Acente</th>
+                                    <th>Pansiyon</th>
+                                    <th>Oda Tipi</th>
+                                    <th>Kişi</th>
+                                    <th>Giriş / Çıkış</th>
+                                    <th>Voucher</th>
+                                    <th>Kullanıcı</th>
+                                </tr>
+                            </thead>
+                            <tbody id="detail-guest-tbody">
+                                <tr>
+                                    <td colspan="9" class="text-center">Yükleniyor...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Javascript -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
