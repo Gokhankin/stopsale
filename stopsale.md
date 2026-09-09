@@ -57,9 +57,9 @@ Bu doküman, `stopsale` klasöründe geliştirilen ve canlı SQL Server (`SednaA
 * **Gerekçe Gösterimi:** `Öneri (ODA_TIPI): Güvenlik Limiti! (Kalan Boş Oda: X, Limit: Y)`
 
 ### 4. Doluluk Yüzdesi Eşiği
-* **Kural:** (Satılan / Kapasite * 100) >= Doluluk Eşik Yüzdesi (Varsayılan: `%95.0`)
-* **Açıklama:** İlgili oda tipi doluluğu belirlenen yüzdesel eşiğe ulaştığında tetiklenir.
-* **Gerekçe Gösterimi:** `Öneri (ODA_TIPI): Yüksek Doluluk! (%X >= %Y)`
+* **Kural:** (Satılan / Kapasite * 100) >= Doluluk Eşik Yüzdesi (Varsayılan: `%90.0`)
+* **Açıklama:** Otel genel doluluğu veya ilgili oda tipi doluluğu belirlenen yüzdesel eşiğe (%90) ulaştığında Stopsale önerilir/tetiklenir.
+* **Gerekçe Gösterimi:** `Öneri: Yüksek Doluluk! (%X >= %90.0)`
 
 ---
 
@@ -68,7 +68,7 @@ Bu doküman, `stopsale` klasöründe geliştirilen ve canlı SQL Server (`SednaA
 Uygulamanın ayarlarını ve sistem dışında planlanan lokal stopsale kayıtlarını saklamak için SQLite veritabanı kullanılır:
 
 ### 1. `settings` (Ayarlar Tablosu)
-* `threshold_pct` (DEFAULT `95.0`): Stopsale önerisini tetikleyecek yüzde sınırı.
+* `threshold_pct` (DEFAULT `90.0`): Stopsale önerisini tetikleyecek yüzde sınırı (%90.0).
 * `buffer_rooms` (DEFAULT `2`): Kritik oda güvenlik sınırı.
 * `default_year` (DEFAULT `2026`): Raporlanacak sezon yılı.
 

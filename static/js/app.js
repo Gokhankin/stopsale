@@ -283,15 +283,19 @@ document.addEventListener("DOMContentLoaded", function() {
                 // Color cell based on filter parameters
                 let stateClass = "state-normal-low";
                 let occPct = dayData.occupancy_pct;
+                let hasStopsale = false;
+                
+                const threshold = summary ? summary.threshold_pct : 90.0;
                 
                 // If filtering by room type, occupancy is specific to room type
                 if (activeFilters.roomType !== "ALL") {
                     const rtData = dayData.room_types[activeFilters.roomType];
                     if (rtData) {
                         occPct = rtData.occupancy_pct;
+                        hasStopsale = rtData.stopsale_applied;
                         if (rtData.stopsale_applied) {
                             stateClass = "state-stopsale";
-                        } else if (rtData.needs_stopsale) {
+                        } else if (rtData.sold > rtData.capacity || rtData.needs_stopsale || occPct >= threshold) {
                             stateClass = "state-danger";
                         } else if (occPct >= 70.0) {
                             stateClass = "state-warn";
@@ -303,11 +307,12 @@ document.addEventListener("DOMContentLoaded", function() {
                     }
                 } else {
                     // Hotelwide metrics
+                    hasStopsale = dayData.stopsale_applied;
                     if (dayData.alert_level === "stopsale") {
                         stateClass = "state-stopsale";
-                    } else if (dayData.alert_level === "danger") {
+                    } else if (dayData.has_overbook || dayData.alert_level === "danger" || occPct >= threshold) {
                         stateClass = "state-danger";
-                    } else if (dayData.alert_level === "warn" || occPct >= 70.0) {
+                    } else if (dayData.alert_level === "warn" || occPct >= 70.0 || (dayData.full_rooms && dayData.full_rooms.length > 0)) {
                         stateClass = "state-warn";
                     } else if (occPct >= 40.0) {
                         stateClass = "state-normal-high";
@@ -318,15 +323,24 @@ document.addEventListener("DOMContentLoaded", function() {
                 
                 cell.classList.add(stateClass);
                 
-                // Check if has stopsales to render small indicator dot
-                if (dayData.stopsales_sedna.length > 0 || dayData.stopsales_local.length > 0) {
+                // Check if has stopsales or overbooks to render indicator
+                if (hasStopsale || dayData.stopsales_sedna.length > 0 || dayData.stopsales_local.length > 0) {
                     cell.classList.add("has-ss-indicator");
                 }
                 
                 cell.innerHTML = `<span class="day-num">${dayNum}</span>`;
                 
                 // Hover details tooltip
-                const tooltipText = `${dayData.date}\nDoluluk: %${occPct} (${dayData.sold_total}/${dayData.capacity_total})`;
+                let tooltipText = `${dayData.date}\nDoluluk: %${occPct} (${dayData.sold_total}/${dayData.capacity_total})`;
+                if (dayData.has_overbook && dayData.overbooked_rooms) {
+                    tooltipText += `\n⚠️ OVERBOOK: ${dayData.overbooked_rooms.join(', ')}`;
+                } else if (dayData.full_rooms && dayData.full_rooms.length > 0) {
+                    tooltipText += `\n⛔ DOLU: ${dayData.full_rooms.join(', ')}`;
+                }
+                if (activeFilters.roomType !== "ALL" && dayData.room_types[activeFilters.roomType]) {
+                    const rt = dayData.room_types[activeFilters.roomType];
+                    tooltipText = `${dayData.date} [${activeFilters.roomType}]\nDoluluk: %${rt.occupancy_pct} (${rt.sold}/${rt.capacity})`;
+                }
                 cell.title = tooltipText;
                 
                 // Event listener click details
@@ -350,23 +364,28 @@ document.addEventListener("DOMContentLoaded", function() {
     function renderAuditTable(dates, summary) {
         elements.auditTableBody.innerHTML = "";
         
+        const threshold = summary ? summary.threshold_pct : 90.0;
+        
         // Filter dates based on current selector filters
         let filteredDates = dates;
         
         // Status filter logic
         if (activeFilters.status !== "ALL") {
             filteredDates = dates.filter(d => {
-                if (activeFilters.status === "CRITICAL") {
-                    return d.needs_stopsale;
-                } else if (activeFilters.status === "MISSING_STOPSALE") {
-                    return d.needs_stopsale && !d.stopsale_applied;
-                } else if (activeFilters.status === "STOPSALE_ACTIVE") {
-                    return d.stopsale_applied;
-                } else if (activeFilters.status === "REOPEN_RECOMMENDED") {
-                    // Stopsale set but occupancy low (< 80%)
-                    return d.stopsale_applied && d.occupancy_pct < 80.0;
-                } else if (activeFilters.status === "NORMAL") {
-                    return !d.needs_stopsale && !d.stopsale_applied;
+                if (activeFilters.roomType !== "ALL") {
+                    const rt = d.room_types[activeFilters.roomType];
+                    if (!rt) return false;
+                    if (activeFilters.status === "CRITICAL") return rt.sold > rt.capacity || rt.needs_stopsale || rt.occupancy_pct >= threshold;
+                    if (activeFilters.status === "MISSING_STOPSALE") return (rt.sold > rt.capacity || rt.needs_stopsale || rt.occupancy_pct >= threshold) && !rt.stopsale_applied;
+                    if (activeFilters.status === "STOPSALE_ACTIVE") return rt.stopsale_applied;
+                    if (activeFilters.status === "REOPEN_RECOMMENDED") return rt.stopsale_applied && rt.occupancy_pct < 80.0;
+                    if (activeFilters.status === "NORMAL") return rt.sold <= rt.capacity && !rt.needs_stopsale && !rt.stopsale_applied && rt.occupancy_pct < threshold;
+                } else {
+                    if (activeFilters.status === "CRITICAL") return d.has_overbook || d.needs_stopsale || d.occupancy_pct >= threshold;
+                    if (activeFilters.status === "MISSING_STOPSALE") return (d.has_overbook || d.needs_stopsale || d.occupancy_pct >= threshold) && !d.stopsale_applied;
+                    if (activeFilters.status === "STOPSALE_ACTIVE") return d.stopsale_applied;
+                    if (activeFilters.status === "REOPEN_RECOMMENDED") return d.stopsale_applied && d.occupancy_pct < 80.0;
+                    if (activeFilters.status === "NORMAL") return !d.has_overbook && !d.needs_stopsale && !d.stopsale_applied && d.occupancy_pct < threshold;
                 }
                 return true;
             });
@@ -376,18 +395,7 @@ document.addEventListener("DOMContentLoaded", function() {
         if (activeFilters.roomType !== "ALL") {
             filteredDates = filteredDates.filter(d => {
                 const rt = d.room_types[activeFilters.roomType];
-                if (!rt) return false;
-                
-                if (activeFilters.status === "CRITICAL") {
-                    return rt.needs_stopsale;
-                } else if (activeFilters.status === "MISSING_STOPSALE") {
-                    return rt.needs_stopsale && !rt.stopsale_applied;
-                } else if (activeFilters.status === "STOPSALE_ACTIVE") {
-                    return rt.stopsale_applied;
-                } else if (activeFilters.status === "REOPEN_RECOMMENDED") {
-                    return rt.stopsale_applied && rt.occupancy_pct < 80.0;
-                }
-                return true;
+                return !!rt;
             });
         }
         
@@ -399,15 +407,6 @@ document.addEventListener("DOMContentLoaded", function() {
         filteredDates.forEach(day => {
             const tr = document.createElement("tr");
             
-            // Set tr styling class
-            if (day.alert_level === "stopsale") {
-                tr.className = "row-stopsale";
-            } else if (day.alert_level === "danger") {
-                tr.className = "row-danger";
-            } else if (day.alert_level === "warn") {
-                tr.className = "row-warn";
-            }
-            
             // 1. Date (Turkish Format)
             const dateStr = formatTurkishDate(day.date);
             
@@ -418,6 +417,10 @@ document.addEventListener("DOMContentLoaded", function() {
             let sold = day.sold_total;
             let cap = day.capacity_total;
             let occPct = day.occupancy_pct;
+            let isStopsaleApplied = day.stopsale_applied;
+            let isNeedsStopsale = day.needs_stopsale;
+            let isOverbook = day.has_overbook;
+            let stopsaleDetails = day.stopsale_details;
             
             // If room type selected, override table counts
             if (activeFilters.roomType !== "ALL") {
@@ -426,15 +429,30 @@ document.addEventListener("DOMContentLoaded", function() {
                     sold = rt.sold;
                     cap = rt.capacity;
                     occPct = rt.occupancy_pct;
+                    isStopsaleApplied = rt.stopsale_applied;
+                    isOverbook = rt.sold > rt.capacity;
+                    isNeedsStopsale = isOverbook || rt.needs_stopsale || (occPct >= threshold);
+                    stopsaleDetails = rt.stopsale_details;
                 }
+            } else {
+                isNeedsStopsale = day.has_overbook || day.needs_stopsale || (occPct >= threshold);
+            }
+            
+            // Set tr styling class
+            if (isStopsaleApplied) {
+                tr.className = "row-stopsale";
+            } else if (isOverbook || isNeedsStopsale || occPct >= threshold) {
+                tr.className = "row-danger";
+            } else if (occPct >= 70.0 || (day.full_rooms && day.full_rooms.length > 0)) {
+                tr.className = "row-warn";
             }
             
             const soldCapHtml = `${sold} / ${cap}`;
             
             // 4. Occupancy Badge
             let badgeClass = "badge-success";
-            if (occPct >= 95.0) badgeClass = "badge-danger";
-            else if (occPct >= 85.0) badgeClass = "badge-warning";
+            if (isOverbook || occPct >= threshold) badgeClass = "badge-danger";
+            else if (occPct >= 70.0 || (day.full_rooms && day.full_rooms.length > 0)) badgeClass = "badge-warning";
             const occBadge = `<span class="badge ${badgeClass}">${occPct}%</span>`;
             
             // 5. Room Type Status badgification (mini display)
@@ -445,28 +463,35 @@ document.addEventListener("DOMContentLoaded", function() {
                 if (rtData.sold > 0) {
                     let rtClass = "";
                     if (rtData.stopsale_applied) rtClass = "rt-stopsale";
-                    else if (rtData.needs_stopsale) rtClass = "rt-danger";
-                    else if (rtData.sold >= rtData.capacity) rtClass = "rt-full";
+                    else if (rtData.sold > rtData.capacity) rtClass = "rt-danger";
+                    else if (rtData.sold === rtData.capacity || rtData.occupancy_pct >= threshold) rtClass = "rt-full";
                     
-                    rtBadgesHtml += `<span class="rt-badge ${rtClass}" title="${rt}: ${rtData.sold}/${rtData.capacity}">${rt} (${rtData.sold})</span>`;
+                    const isOb = rtData.sold > rtData.capacity ? " ⚠️" : "";
+                    rtBadgesHtml += `<span class="rt-badge ${rtClass}" title="${rt}: ${rtData.sold}/${rtData.capacity}${isOb}">${rt} (${rtData.sold})${isOb}</span>`;
                 }
             });
             rtBadgesHtml += `</div>`;
             
             // 6. Rule/Stopsale Status Badge
             let ruleHtml = "";
-            if (day.stopsale_applied) {
-                if (day.occupancy_pct < 80.0) {
-                    ruleHtml = `<span class="badge badge-warning" title="${day.stopsale_details.join(', ')}"><i class="fa-solid fa-door-open"></i> Satışa Açılabilir</span>`;
+            if (isStopsaleApplied) {
+                if (occPct < 80.0) {
+                    ruleHtml = `<span class="badge badge-warning" title="${stopsaleDetails.join(', ')}"><i class="fa-solid fa-door-open"></i> Satışa Açılabilir</span>`;
                 } else {
-                    ruleHtml = `<span class="badge badge-purple" title="${day.stopsale_details.join(', ')}"><i class="fa-solid fa-ban"></i> Stopsale Aktif</span>`;
+                    ruleHtml = `<span class="badge badge-purple" title="${stopsaleDetails.join(', ')}"><i class="fa-solid fa-ban"></i> Stopsale Aktif</span>`;
                 }
-            } else if (day.needs_stopsale) {
-                ruleHtml = `<span class="badge badge-danger" title="${day.stopsale_details.join(', ')}"><i class="fa-solid fa-triangle-exclamation"></i> Stopsale Gerekli!</span>`;
+            } else if (isOverbook) {
+                const obDesc = day.overbooked_rooms ? day.overbooked_rooms.join(', ') : 'Aşırı Satış';
+                ruleHtml = `<span class="badge badge-danger" title="${obDesc}"><i class="fa-solid fa-triangle-exclamation"></i> Overbook Uyarısı!</span>`;
+            } else if (isNeedsStopsale || occPct >= threshold) {
+                ruleHtml = `<span class="badge badge-danger" title="${stopsaleDetails.join(', ')}"><i class="fa-solid fa-triangle-exclamation"></i> Stopsale Gerekli (%${occPct})</span>`;
+            } else if (day.full_rooms && day.full_rooms.length > 0) {
+                const fullDesc = day.full_rooms.join(', ');
+                ruleHtml = `<span class="badge badge-warning" title="${fullDesc}"><i class="fa-solid fa-bed"></i> Dolu Odalar</span>`;
             } else if (occPct >= 70.0) {
-                ruleHtml = `<span class="badge badge-warning"><i class="fa-solid fa-fire"></i> Yoğun</span>`;
+                ruleHtml = `<span class="badge badge-warning"><i class="fa-solid fa-fire"></i> Yoğun (%${occPct})</span>`;
             } else {
-                ruleHtml = `<span class="badge badge-success"><i class="fa-solid fa-circle-check"></i> Normal</span>`;
+                ruleHtml = `<span class="badge badge-success"><i class="fa-solid fa-circle-check"></i> Normal (%${occPct})</span>`;
             }
             
             // 7. Actions Button
@@ -512,6 +537,8 @@ document.addEventListener("DOMContentLoaded", function() {
     function showDateDetails(dayData) {
         openModal(elements.modalDateDetails);
         
+        const threshold = appData?.summary?.threshold_pct || 90.0;
+        
         // Header
         elements.detailDateTitle.textContent = formatTurkishDate(dayData.date) + " (" + getTurkishDayName(dayData.day_name) + ")";
         
@@ -519,17 +546,28 @@ document.addEventListener("DOMContentLoaded", function() {
         elements.detailDateBadge.className = "badge";
         if (dayData.stopsale_applied) {
             elements.detailDateBadge.classList.add("badge-purple");
-            elements.detailDateBadge.textContent = "Stopsale Aktif";
-        } else if (dayData.needs_stopsale) {
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-ban"></i> Stopsale Aktif`;
+        } else if (dayData.has_overbook) {
             elements.detailDateBadge.classList.add("badge-danger");
-            elements.detailDateBadge.textContent = "Stopsale Gerekli";
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Overbook Uyarısı!`;
+        } else if (dayData.needs_stopsale || dayData.occupancy_pct >= threshold) {
+            elements.detailDateBadge.classList.add("badge-danger");
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Stopsale Gerekli (%${dayData.occupancy_pct})`;
+        } else if (dayData.full_rooms && dayData.full_rooms.length > 0) {
+            elements.detailDateBadge.classList.add("badge-warning");
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-bed"></i> Oda Bazlı Dolu`;
+        } else if (dayData.occupancy_pct >= 70.0) {
+            elements.detailDateBadge.classList.add("badge-warning");
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-fire"></i> Yoğun Doluluk`;
         } else {
             elements.detailDateBadge.classList.add("badge-success");
-            elements.detailDateBadge.textContent = "Satış Açık";
+            elements.detailDateBadge.innerHTML = `<i class="fa-solid fa-circle-check"></i> Satış Açık`;
         }
         
         // Room type occupancy bars
         elements.detailOccupancyBars.innerHTML = "";
+        let firstAlertRoomType = "ALL";
+        
         Object.keys(dayData.room_types).forEach(rt => {
             if (rt.includes("dahil")) return; // Skip virtual group categories
             const rtData = dayData.room_types[rt];
@@ -538,14 +576,32 @@ document.addEventListener("DOMContentLoaded", function() {
             barWrapper.className = "bar-wrapper";
             
             let statusClass = "normal";
-            if (rtData.stopsale_applied) statusClass = "stopsale";
-            else if (rtData.needs_stopsale) statusClass = "danger";
-            else if (rtData.occupancy_pct >= 85.0) statusClass = "warn";
+            let alertTag = "";
+            
+            if (rtData.sold > rtData.capacity) {
+                statusClass = "danger";
+                const diff = rtData.sold - rtData.capacity;
+                alertTag = `<span style="color:#f43f5e; font-weight:700; margin-left:6px;"><i class="fa-solid fa-triangle-exclamation"></i> OVERBOOK (+${diff} Oda)</span>`;
+                if (firstAlertRoomType === "ALL") firstAlertRoomType = rt;
+            } else if (rtData.stopsale_applied) {
+                statusClass = "stopsale";
+                alertTag = `<span class="badge badge-purple" style="margin-left:6px; font-size:10px;">Stopsale</span>`;
+            } else if (rtData.sold === rtData.capacity) {
+                statusClass = "danger";
+                alertTag = `<span style="color:#fb7185; font-weight:600; margin-left:6px;">DOLU</span>`;
+                if (firstAlertRoomType === "ALL") firstAlertRoomType = rt;
+            } else if (rtData.occupancy_pct >= threshold) {
+                statusClass = "danger";
+                alertTag = `<span style="color:#f43f5e; font-weight:600; margin-left:6px;">%${rtData.occupancy_pct}</span>`;
+                if (firstAlertRoomType === "ALL") firstAlertRoomType = rt;
+            } else if (rtData.occupancy_pct >= 70.0) {
+                statusClass = "warn";
+            }
             
             barWrapper.innerHTML = `
                 <div class="bar-info">
                     <span class="bar-name">${rt}</span>
-                    <span class="bar-val">${rtData.sold}/${rtData.capacity} (%${rtData.occupancy_pct})</span>
+                    <span class="bar-val">${rtData.sold}/${rtData.capacity} (%${rtData.occupancy_pct})${alertTag}</span>
                 </div>
                 <div class="bar-container">
                     <div class="bar-fill ${statusClass}" style="width: ${Math.min(rtData.occupancy_pct, 100)}%"></div>
@@ -568,23 +624,33 @@ document.addEventListener("DOMContentLoaded", function() {
             let alertDesc = "";
             let boxClass = "alert-normal";
             
-            if (dayData.stopsale_applied) {
+            if (dayData.has_overbook && dayData.overbooked_rooms && dayData.overbooked_rooms.length > 0) {
+                boxClass = "alert-danger";
+                alertHeader = `<i class="fa-solid fa-triangle-exclamation"></i> ACİL: Aşırı Rezervasyon (Overbook) Tespit Edildi!`;
+                alertDesc = `Bu tarihte aşağıdaki oda tip(ler)inde satılan oda sayısı fiziksel kapasiteyi aşmıştır:<br><div style="margin:8px 0; padding:8px 12px; background:rgba(244,63,94,0.15); border-left:3px solid var(--danger); border-radius:4px; font-weight:600;">${dayData.overbooked_rooms.join("<br>")}</div>Lütfen acilen ilgili oda tipine Stopsale uygulayınız veya fazla rezervasyonları farklı oda kategorisine aktarınız.`;
+            } else if (dayData.stopsale_applied) {
                 boxClass = "alert-stopsale";
                 alertHeader = `<i class="fa-solid fa-ban"></i> Stopsale Engeli Uygulanmış`;
                 alertDesc = `Bu tarihte sistemde aktif stopsale bulunmaktadır. Detaylar:<br><strong>${dayData.stopsale_details.join("<br>")}</strong>`;
-            } else if (dayData.needs_stopsale) {
+            } else if (dayData.needs_stopsale || dayData.occupancy_pct >= threshold) {
                 boxClass = "alert-danger";
-                alertHeader = `<i class="fa-solid fa-triangle-exclamation"></i> Stopsale Çekilmesi Öneriliyor!`;
-                alertDesc = `Oda dolulukları limit sınırına ulaşmıştır. Önerilen aksiyonlar:<br><strong>${dayData.stopsale_details.join("<br>")}</strong>`;
+                alertHeader = `<i class="fa-solid fa-triangle-exclamation"></i> Yüksek Doluluk - Stopsale Öneriliyor!`;
+                alertDesc = `Otel genel doluluk oranı (%${dayData.occupancy_pct}) belirlenen eşik değerine (%${threshold}) ulaşmıştır. Stopsale çekilmesi önerilir.`;
+            } else if ((dayData.full_rooms && dayData.full_rooms.length > 0) || (dayData.high_occ_rooms && dayData.high_occ_rooms.length > 0)) {
+                boxClass = "alert-warning";
+                alertHeader = `<i class="fa-solid fa-circle-exclamation"></i> Oda Tipi Bazlı Doluluk Uyarısı`;
+                const roomAlerts = [...(dayData.full_rooms || []), ...(dayData.high_occ_rooms || [])];
+                alertDesc = `Otel geneli doluluk (%${dayData.occupancy_pct}) müsait olmakla birlikte, aşağıdaki oda tipleri tam kapasiteye veya yüksek doluluğa ulaşmıştır:<br><div style="margin:8px 0; padding:6px 12px; background:rgba(245,158,11,0.15); border-left:3px solid var(--warning); border-radius:4px; font-weight:600;">${roomAlerts.join("<br>")}</div>İlgili oda tipleri için stopsale planlanması önerilir.`;
             } else {
                 boxClass = "alert-normal";
                 alertHeader = `<i class="fa-solid fa-circle-check"></i> Satış Durumu Sağlıklı`;
-                alertDesc = `Tarih dolulukları normal seviyededir. Herhangi bir stopsale aksiyonu gerekmemektedir.`;
+                alertDesc = `Tüm oda tiplerinde ve otel genelinde doluluklar normal seviyededir. Herhangi bir stopsale aksiyonu gerekmemektedir.`;
             }
             
             elements.detailAlertBox.classList.add(boxClass);
             
             // Add quick local stopsale planner form to the alert box
+            let defaultRemark = dayData.has_overbook ? "Aşırı Doluluk - Acil Overbook Stopsale" : "Yoğun Doluluk - Stopsale Önerisi";
             let quickFormHtml = `
                 <div class="alert-box-header">${alertHeader}</div>
                 <div class="alert-box-desc">${alertDesc}</div>
@@ -593,9 +659,9 @@ document.addEventListener("DOMContentLoaded", function() {
                     <div style="display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;">
                         <select id="quick-ls-room-type" style="padding:4px 8px; font-size:12px; background:rgba(0,0,0,0.2); color:white; border:1px solid rgba(255,255,255,0.1); border-radius:4px;">
                             <option value="ALL">Tüm Oda Tipleri</option>
-                            ${Object.keys(dayData.room_types).map(rt => `<option value="${rt}">${rt}</option>`).join("")}
+                            ${Object.keys(dayData.room_types).map(rt => `<option value="${rt}" ${rt === firstAlertRoomType ? 'selected' : ''}>${rt}</option>`).join("")}
                         </select>
-                        <input type="text" id="quick-ls-remark" placeholder="Stopsale Gerekçesi" style="padding:4px 8px; font-size:12px; background:rgba(0,0,0,0.2); color:white; border:1px solid rgba(255,255,255,0.1); border-radius:4px; flex:1;" value="Yoğun Doluluk - Stopsale Önerisi">
+                        <input type="text" id="quick-ls-remark" placeholder="Stopsale Gerekçesi" style="padding:4px 8px; font-size:12px; background:rgba(0,0,0,0.2); color:white; border:1px solid rgba(255,255,255,0.1); border-radius:4px; flex:1;" value="${defaultRemark}">
                         <button id="btn-quick-ls-save" class="btn btn-primary btn-small" style="padding:4px 12px; font-size:12px;"><i class="fa-solid fa-plus"></i> Planı Ekle</button>
                     </div>
                 </div>
@@ -624,7 +690,6 @@ document.addEventListener("DOMContentLoaded", function() {
                     if (data.success) {
                         alert("Stopsale planı başarıyla eklendi.");
                         refreshAllData();
-                        // Reload detail view to show stopsale updated
                         dayData.stopsale_applied = true;
                         dayData.stopsale_details.push(`Planlanan (${rt}): ${remark}`);
                         showDateDetails(dayData);
@@ -653,18 +718,6 @@ document.addEventListener("DOMContentLoaded", function() {
                 
                 guests.forEach(g => {
                     const tr = document.createElement("tr");
-                    tr.innerHTML = `
-                        <td><strong>${g.room_no || '—'}</strong></td>
-                        <td>${g.guest_name}</td>
-                        <td><span class="badge badge-blue">${g.agency}</span></td>
-                        <td>${g.room_type}</td>
-                        <td>${g.adult} Yetişkin + ${g.child} Çocuk</td>
-                        <td>${formatTurkishDate(g.checkin)} - ${formatTurkishDate(g.checkout)} (${g.nights} Gece)</td>
-                        <td>${g.voucher || '—'}</td>
-                        <td><small class="text-muted">${g.record_user}</small></td>
-                    `;
-                    // Wait, standard HTML we had: Room, GuestName, Agency, Pension, RoomType, Person, Checkin/Checkout, Voucher, RecordUser
-                    // Let's map correctly:
                     tr.innerHTML = `
                         <td><strong>${g.room_no || '—'}</strong></td>
                         <td><b>${g.guest_name}</b></td>
@@ -795,6 +848,8 @@ document.addEventListener("DOMContentLoaded", function() {
             let ruleStatus = "Normal";
             if (d.stopsale_applied) {
                 ruleStatus = d.occupancy_pct < 80.0 ? "Satis Acilabilir" : "Stopsale Aktif";
+            } else if (d.has_overbook) {
+                ruleStatus = "Overbook Uyarisi";
             } else if (d.needs_stopsale) {
                 ruleStatus = "Stopsale Gerekli";
             }

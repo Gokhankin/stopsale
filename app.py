@@ -57,8 +57,8 @@ def init_sqlite_db():
             )
         """)
         
-        # Set default settings
-        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold_pct', '95.0')")
+        # Set default settings (Default 90% threshold for stopsale)
+        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold_pct', '90.0')")
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('buffer_rooms', '2')")
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_year', '2026')")
         
@@ -78,7 +78,7 @@ def get_sql_conn():
 # Fetch settings from SQLite
 def get_app_settings():
     settings = {
-        'threshold_pct': 95.0,
+        'threshold_pct': 90.0,
         'buffer_rooms': 2,
         'default_year': TARGET_YEAR
     }
@@ -221,7 +221,6 @@ def get_room_capacities_endpoint():
     try:
         sql_conn = get_sql_conn()
         
-        # Dynamic query counting room capacities based on active and forecast=1 flags
         q = """
             SELECT 
                 r.RoomTypeCode as room_type,
@@ -264,8 +263,6 @@ def get_date_details():
     try:
         sql_conn = get_sql_conn()
         
-        # Fetch reservations active on this specific date
-        # Note: We bind stay_date as parameter. pyodbc binds it safely.
         q = """
             SELECT 
                 r.RecId as rez_id,
@@ -307,14 +304,12 @@ def get_date_details():
 # API: Core Stopsale Audit Data
 @app.route('/api/occupancy')
 def get_occupancy_data():
-    # Date range filters (defaults to the May 1 - Oct 31 of targeted year)
     settings = get_app_settings()
     year = settings['default_year']
     
     start_date_str = request.args.get('start_date', f"{year}-06-01")
     end_date_str = request.args.get('end_date', f"{year}-10-31")
     
-    # Thresholds
     threshold_pct = settings['threshold_pct']
     buffer_rooms = settings['buffer_rooms']
     
@@ -336,7 +331,7 @@ def get_occupancy_data():
         """
         df_cap = pd.read_sql(cap_q, sql_conn)
         
-        # Merge standard room types
+        # Merge standard room types (STD-LVL -> STD-LV, STD-SVL -> STD-SV)
         df_cap['room_type'] = df_cap['room_type'].apply(merge_room_type)
         df_cap = df_cap.groupby('room_type', as_index=False)['capacity'].sum()
         
@@ -344,7 +339,6 @@ def get_occupancy_data():
         total_capacity = sum(capacities.values())
         
         # 2. Fetch Live Occupancies Day-by-Day (Total & Per Room Type)
-        # Convert string dates to safe format YYYYMMDD to bypass SQL Server language-date parse issues
         start_iso = start_date_str.replace("-", "")
         end_iso = end_date_str.replace("-", "")
         
@@ -363,7 +357,6 @@ def get_occupancy_data():
         df_occ = pd.read_sql(occ_q, sql_conn)
         
         # 3. Fetch Stopsales already configured in Sedna's tables
-        # Even if empty, we write the robust query to read them in case they exist
         sedna_stopsales_q = """
             SELECT 
                 CAST(sd.BeginDate AS DATE) as begin_date,
@@ -394,7 +387,6 @@ def get_occupancy_data():
         
         # Pivot occupancies: index = stay_date, columns = room_type, value = sold_rooms
         if not df_occ.empty:
-            # stay_date might be returned as Timestamp or string depending on driver
             df_occ['stay_date'] = pd.to_datetime(df_occ['stay_date']).dt.date
             df_occ['room_type'] = df_occ['room_type'].apply(merge_room_type)
             df_occ = df_occ.groupby(['stay_date', 'room_type'], as_index=False)['sold_rooms'].sum()
@@ -402,13 +394,11 @@ def get_occupancy_data():
         else:
             df_pivot = pd.DataFrame()
             
-        # Parse Sedna Stopsales to check active dates
-        # We will build a helper function to check if a specific date and room_type has Sedna stopsale
+        # Helper: check Sedna stopsale
         def check_sedna_stopsale(target_date, target_room_type):
             if df_sedna_ss.empty:
                 return False, ""
             
-            # Filter stopsales where target_date falls within [begin_date, end_date]
             mask = (pd.to_datetime(df_sedna_ss['begin_date']).dt.date <= target_date) & \
                    (pd.to_datetime(df_sedna_ss['end_date']).dt.date >= target_date)
             active_ss = df_sedna_ss[mask]
@@ -431,7 +421,7 @@ def get_occupancy_data():
                         return True, f"Sedna ({row_rt}): {row['remark']}"
             return False, ""
             
-        # Parse Local Stopsales
+        # Helper: check Local stopsale
         def check_local_stopsale(target_date, target_room_type):
             if local_ss_df.empty:
                 return False, ""
@@ -493,6 +483,10 @@ def get_occupancy_data():
                 'stopsales_local': [],
                 'alert_level': 'normal', # normal, warn, danger, stopsale
                 'needs_stopsale': False,
+                'has_overbook': False,
+                'overbooked_rooms': [],
+                'full_rooms': [],
+                'high_occ_rooms': [],
                 'stopsale_applied': False,
                 'stopsale_details': [],
                 'is_past': is_past
@@ -548,19 +542,15 @@ def get_occupancy_data():
                 if not is_past and cap > 0:
                     if sold > cap:
                         rt_needs_ss = True
-                        rt_reason = f"Overbook! ({sold}/{cap} oda satıldı)"
+                        rt_reason = f"Overbook! ({sold}/{cap} oda satıldı - %{rt_occ_pct:.1f})"
                     elif sold == cap:
                         rt_needs_ss = True
                         rt_reason = f"Dolu! ({sold}/{cap} oda satıldı)"
-                    elif cap > buffer_rooms and sold >= (cap - buffer_rooms):
-                        rt_needs_ss = True
-                        rt_reason = f"Güvenlik Limiti! (Kalan Boş Oda: {cap - sold}, Limit: {buffer_rooms})"
                     elif rt_occ_pct >= threshold_pct:
                         rt_needs_ss = True
                         rt_reason = f"Yüksek Doluluk! (%{rt_occ_pct:.0f} >= %{threshold_pct:.0f})"
                 
                 if rt_needs_ss:
-                    row_data['needs_stopsale'] = True
                     if rt_ss_details:
                         row_data['stopsale_details'].extend(rt_ss_details)
                     else:
@@ -612,9 +602,6 @@ def get_occupancy_data():
                     elif vg_sold == vg_cap:
                         vg_needs_ss = True
                         vg_reason = f"Dolu! ({vg_sold}/{vg_cap} oda satıldı)"
-                    elif vg_cap > buffer_rooms and vg_sold >= (vg_cap - buffer_rooms):
-                        vg_needs_ss = True
-                        vg_reason = f"Güvenlik Limiti! (Kalan Boş Oda: {vg_cap - vg_sold}, Limit: {buffer_rooms})"
                     elif vg_occ_pct >= threshold_pct:
                         vg_needs_ss = True
                         vg_reason = f"Yüksek Doluluk! (%{vg_occ_pct:.0f} >= %{threshold_pct:.0f})"
@@ -634,19 +621,56 @@ def get_occupancy_data():
             row_data['occupancy_pct'] = round(hotel_occ_pct, 1)
             row_data['room_types'] = room_type_details
             
-            # If total hotel occupancy exceeds general threshold, stopsale is needed
-            if not is_past and hotel_occ_pct >= threshold_pct:
-                row_data['needs_stopsale'] = True
-                row_data['stopsale_details'].append(f"Öneri (Tüm Otel): Yüksek Doluluk! (%{hotel_occ_pct:.1f} >= %{threshold_pct:.1f})")
-                
+            # Detect overbooked, full, and high occupancy room types
+            has_overbook = False
+            overbooked_rooms = []
+            full_rooms = []
+            high_occ_rooms = []
+            
+            for rt in individual_room_types:
+                data = room_type_details[rt]
+                if data['capacity'] > 0:
+                    if data['sold'] > data['capacity']:
+                        has_overbook = True
+                        diff = data['sold'] - data['capacity']
+                        overbooked_rooms.append(f"{rt}: {data['sold']}/{data['capacity']} (+{diff} Overbook)")
+                    elif data['sold'] == data['capacity']:
+                        full_rooms.append(f"{rt}: {data['sold']}/{data['capacity']} (Dolu)")
+                    elif data['occupancy_pct'] >= threshold_pct:
+                        high_occ_rooms.append(f"{rt}: %{data['occupancy_pct']:.0f} (>=%{threshold_pct:.0f})")
+            
+            row_data['has_overbook'] = has_overbook
+            row_data['overbooked_rooms'] = overbooked_rooms
+            row_data['full_rooms'] = full_rooms
+            row_data['high_occ_rooms'] = high_occ_rooms
+            
+            # Hotel-wide stopsale requirement (triggers when total hotel reaches threshold e.g. 90%, or total capacity full, OR any room type overbooked)
+            hotel_needs_ss = False
+            if not is_past and total_capacity > 0:
+                if sold_total > total_capacity:
+                    hotel_needs_ss = True
+                    row_data['stopsale_details'].append(f"Öneri (Tüm Otel): Aşırı Doluluk / Overbook! ({sold_total}/{total_capacity} oda)")
+                elif sold_total == total_capacity:
+                    hotel_needs_ss = True
+                    row_data['stopsale_details'].append(f"Öneri (Tüm Otel): Tam Kapasite Dolu! ({sold_total}/{total_capacity} oda)")
+                elif hotel_occ_pct >= threshold_pct:
+                    hotel_needs_ss = True
+                    row_data['stopsale_details'].append(f"Öneri (Tüm Otel): Yüksek Doluluk! (%{hotel_occ_pct:.1f} >= %{threshold_pct:.1f})")
+                elif has_overbook:
+                    hotel_needs_ss = True
+            
+            row_data['needs_stopsale'] = hotel_needs_ss
+            
             # Determine overall Alert Level for styling
             if row_data['stopsale_applied']:
                 row_data['alert_level'] = 'stopsale'
-            elif row_data['needs_stopsale']:
+            elif has_overbook or (not is_past and hotel_occ_pct >= threshold_pct) or (not is_past and sold_total >= total_capacity):
                 row_data['alert_level'] = 'danger'
                 critical_dates_count += 1
-            elif hotel_occ_pct >= 70.0:
+            elif len(full_rooms) > 0 or len(high_occ_rooms) > 0 or hotel_occ_pct >= 70.0:
                 row_data['alert_level'] = 'warn'
+            elif hotel_occ_pct >= 40.0:
+                row_data['alert_level'] = 'normal-high'
             else:
                 row_data['alert_level'] = 'normal'
                 
